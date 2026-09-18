@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Route Sheet - Enhanced View VSP4 - AUTOPRINT
 // @namespace    https://github.com/selmobe/tampermonkey-route-sheet
-// @version      8.2
+// @version      8.3
 // @author       micaelqg
 // @description  Enhances route sheet with package count, cycle info and translated windows
 // @match        https://na.ssd-route-sheet-ui.gsf.a2z.com/*
@@ -15,6 +15,9 @@
 // - Adicionado Auto Print: botão toggle que seleciona e imprime rotas não impressas automaticamente (cooldown 10s)
 // - Adicionado Print Log Panel: painel lateral com histórico de impressões persistido em localStorage
 // - Registra rotas impressas com código, pacotes, timestamp e status (ok/error)
+// ── Changelog v8.3 ──
+// - Botão Auto Print reposicionado para canto inferior direito
+// - Print Log Panel abre acima do botão
 
 (function () {
   'use strict';
@@ -211,10 +214,10 @@
       .pkg-row { display: flex !important; visibility: visible !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
       #rs-log-panel, #rs-auto-btn { display: none !important; }
     }
-    #rs-auto-btn { position: fixed; bottom: 14px; left: 14px; width: 48px; height: 48px; border-radius: 50%; border: 2px solid #444; background: #1a1a2e; color: #e0e0e0; font-size: 22px; cursor: pointer; z-index: 99999; box-shadow: 0 4px 12px rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; transition: all .2s; }
+    #rs-auto-btn { position: fixed; bottom: 14px; right: 14px; width: 48px; height: 48px; border-radius: 50%; border: 2px solid #444; background: #1a1a2e; color: #e0e0e0; font-size: 22px; cursor: pointer; z-index: 99999; box-shadow: 0 4px 12px rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; transition: all .2s; }
     #rs-auto-btn:hover { transform: scale(1.1); }
     #rs-auto-btn.active { background: #0e6b0e; border-color: #50fa7b; box-shadow: 0 0 12px rgba(80,250,123,.4); }
-    #rs-log-panel { position: fixed; bottom: 10px; right: 10px; width: 280px; max-height: 350px; background: #1a1a2e; color: #e0e0e0; border: 1px solid #333; border-radius: 8px; font-family: monospace; font-size: 11px; z-index: 99999; box-shadow: 0 4px 12px rgba(0,0,0,.5); display: none; }
+    #rs-log-panel { position: fixed; bottom: 70px; right: 14px; width: 280px; max-height: 350px; background: #1a1a2e; color: #e0e0e0; border: 1px solid #333; border-radius: 8px; font-family: monospace; font-size: 11px; z-index: 99999; box-shadow: 0 4px 12px rgba(0,0,0,.5); display: none; }
     #rs-log-panel.visible { display: block; }
     #rs-log-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #16213e; border-radius: 8px 8px 0 0; font-weight: bold; font-size: 12px; }
     #rs-log-header button { background: none; border: none; color: #e0e0e0; cursor: pointer; font-size: 13px; padding: 0 4px; }
