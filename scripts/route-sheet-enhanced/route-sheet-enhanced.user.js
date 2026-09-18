@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Route Sheet - Enhanced View VSP4
+// @name         Route Sheet - Enhanced View VSP4 - AUTOPRINT
 // @namespace    https://github.com/selmobe/tampermonkey-route-sheet
-// @version      8.0
+// @version      8.2
 // @author       micaelqg
 // @description  Enhances route sheet with package count, cycle info and translated windows
 // @match        https://na.ssd-route-sheet-ui.gsf.a2z.com/*
@@ -11,14 +11,21 @@
 // @downloadURL  https://raw.githubusercontent.com/selmobe/tampermonkey-route-sheet/main/scripts/route-sheet-enhanced/route-sheet-enhanced.user.js
 // ==/UserScript==
 
+// ── Changelog v8.2 ──
+// - Adicionado Auto Print: botão toggle que seleciona e imprime rotas não impressas automaticamente (cooldown 10s)
+// - Adicionado Print Log Panel: painel lateral com histórico de impressões persistido em localStorage
+// - Registra rotas impressas com código, pacotes, timestamp e status (ok/error)
+
 (function () {
   'use strict';
 
   let printingRoutes = [];
-  let routeMap = {};
-
-  const MAX_1_5HR_MS = 5400000;
-  const PROCESSED_ATTR = 'data-rs-enhanced';
+  const routeTimeMap = {};
+  let isPrinting = false;
+  let lastPrintTime = 0;
+  let autoEnabled = false;
+  const PRINT_COOLDOWN = 10000;
+  const LOG_KEY = 'rs_print_log';
 
   const TIME_RANGES = [
     { min: '00:00:00', max: '08:59:59', cycle: 'C1', window: 'SUBSAME_DAY_1' },
@@ -45,24 +52,14 @@
     return TIME_RANGES.find(r => time >= r.min && time <= r.max) || null;
   }
 
-  function buildRouteKey(routeCode, dispatchByTime) {
-    return routeCode + '|' + (dispatchByTime || '');
-  }
-
-  function getBlockOverride(route) {
-    if (route.displayBlockLength === '2HR' && route.rawRouteLengthValue <= MAX_1_5HR_MS) return '1.5HR';
-    return null;
-  }
-
   function storeRoutes(data) {
-    routeMap = {};
+    // limpa dados anteriores
+    Object.keys(routeTimeMap).forEach(k => delete routeTimeMap[k]);
     (Array.isArray(data) ? data : []).forEach(r => {
-      if (!r.routeCode || !r.mainPromiseTime) return;
-      const key = buildRouteKey(r.routeCode, r.dispatchByTime);
-      routeMap[key] = {
-        mainPromiseTime: r.mainPromiseTime,
-        blockOverride: getBlockOverride(r)
-      };
+      if (r.routeCode && r.mainPromiseTime) {
+        const key = r.routeCode + '|' + (r.dispatchByTime || '');
+        routeTimeMap[key] = r.mainPromiseTime;
+      }
     });
   }
 
@@ -72,11 +69,13 @@
     const url = typeof args[0] === 'string' ? args[0] : args[0]?.url || '';
 
     if (url.includes('/api/get_recent_routes')) {
+      const isNotPrinted = url.includes('printed=false');
       const res = await origFetch.apply(this, args);
       try {
         const data = await res.clone().json();
         storeRoutes(data);
-        setTimeout(enhanceTable, 500);
+        setTimeout(replaceTableWindows, 500);
+        if (isNotPrinted && data.length) setTimeout(autoPrint, 2000);
       } catch (e) {}
       return res;
     }
@@ -84,7 +83,9 @@
     if (url.includes('/api/print_route_sheets')) {
       try {
         const body = (args[1] || {}).body;
-        if (typeof body === 'string') printingRoutes = JSON.parse(body);
+        if (typeof body === 'string') {
+          printingRoutes = JSON.parse(body);
+        }
       } catch (e) {}
     }
 
@@ -94,20 +95,26 @@
   // ── Intercepta XHR ──
   const origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function (m, url) {
-    this._rsUrl = url;
-    this._rsMethod = m;
+    this._pkgUrl = url;
+    this._pkgMethod = m;
     return origOpen.apply(this, arguments);
   };
   const origSend = XMLHttpRequest.prototype.send;
   XMLHttpRequest.prototype.send = function (body) {
-    if (this._rsMethod === 'POST' && this._rsUrl?.includes('/api/print_route_sheets')) {
-      try { if (typeof body === 'string') printingRoutes = JSON.parse(body); } catch (e) {}
+    if (this._pkgMethod === 'POST' && this._pkgUrl && this._pkgUrl.includes('/api/print_route_sheets')) {
+      try {
+        if (typeof body === 'string') printingRoutes = JSON.parse(body);
+      } catch (e) {}
     }
-    if (this._rsUrl?.includes('/api/get_recent_routes')) {
+    // intercepta XHR GET para get_recent_routes (fallback se site usar XHR)
+    if (this._pkgUrl && this._pkgUrl.includes('/api/get_recent_routes')) {
+      const isNotPrinted = this._pkgUrl.includes('printed=false');
       this.addEventListener('load', function () {
         try {
-          storeRoutes(JSON.parse(this.responseText));
-          setTimeout(enhanceTable, 500);
+          const data = JSON.parse(this.responseText);
+          storeRoutes(data);
+          setTimeout(replaceTableWindows, 500);
+          if (isNotPrinted && data.length) setTimeout(autoPrint, 2000);
         } catch (e) {}
       });
     }
@@ -115,29 +122,23 @@
   };
 
   // ── Substituição na tabela ──
-  function enhanceTable() {
-    if (!Object.keys(routeMap).length) return;
-    document.querySelectorAll(`table tbody tr:not([${PROCESSED_ATTR}])`).forEach(tr => {
+  function replaceTableWindows() {
+    if (!Object.keys(routeTimeMap).length) return;
+    document.querySelectorAll('table tbody tr').forEach(tr => {
       const cells = tr.querySelectorAll('td');
       if (cells.length < 6) return;
-      const pwSpan = cells[1]?.querySelector('span');
-      const rcSpan = cells[2]?.querySelector('span');
-      const dtSpan = cells[5]?.querySelector('span');
+      const pwSpan = cells[1].querySelector('span');
+      const rcSpan = cells[2].querySelector('span');
+      const dtSpan = cells[5].querySelector('span');
       if (!pwSpan || !rcSpan || !dtSpan) return;
-
-      const key = buildRouteKey(rcSpan.textContent.trim(), dtSpan.textContent.trim());
-      const entry = routeMap[key];
-      if (!entry) return;
-
-      const range = findTimeRange(entry.mainPromiseTime);
-      if (range) pwSpan.textContent = range.cycle;
-
-      if (entry.blockOverride) {
-        const blSpan = cells[3]?.querySelector('span');
-        if (blSpan && blSpan.textContent.trim() === '2HR') blSpan.textContent = entry.blockOverride;
+      const rc = rcSpan.textContent.trim();
+      const dt = dtSpan.textContent.trim();
+      const key = rc + '|' + dt;
+      const mpt = routeTimeMap[key];
+      const range = findTimeRange(mpt);
+      if (range) {
+        pwSpan.textContent = range.cycle;
       }
-
-      tr.setAttribute(PROCESSED_ATTR, '1');
     });
   }
 
@@ -146,6 +147,7 @@
   window.print = function () {
     setTimeout(() => {
       injectPrint();
+      logRoutes(printingRoutes, 'ok');
       setTimeout(() => origPrint.call(window), 100);
     }, 150);
   };
@@ -154,25 +156,21 @@
   function injectPrint() {
     if (!printingRoutes.length) return;
     document.querySelectorAll('.pkg-row').forEach(el => el.remove());
+    const pages = document.querySelectorAll('.rs-page');
 
-    document.querySelectorAll('.rs-page').forEach((page, idx) => {
+    pages.forEach((page, idx) => {
       const route = getRouteForPage(page, idx);
       if (!route) return;
 
       const range = findTimeRange(route.mainPromiseTime);
       const cycle = range ? range.cycle : '-';
       const windowName = range ? range.window : '-';
-      const rcKey = buildRouteKey(route.routeCode, route.dispatchByTime);
-      const blockOverride = routeMap[rcKey]?.blockOverride || getBlockOverride(route);
 
       page.querySelectorAll('.rs-row').forEach(row => {
         const title = row.querySelector('.rs-small-title');
         const data = row.querySelector('.rs-large-data');
-        if (!title || !data) return;
-        const label = title.textContent.trim().toLowerCase();
-        if (label.includes('window')) data.textContent = windowName;
-        if (blockOverride && (label.includes('block') || label.includes('route length')) && data.textContent.trim() === '2HR') {
-          data.textContent = blockOverride;
+        if (title && data && title.textContent.trim().toLowerCase().includes('window')) {
+          data.textContent = windowName;
         }
       });
 
@@ -210,25 +208,131 @@
   const style = document.createElement('style');
   style.textContent = `
     @media print {
-      .pkg-row {
-        display: flex !important;
-        visibility: visible !important;
-        -webkit-print-color-adjust: exact;
-        print-color-adjust: exact;
-      }
+      .pkg-row { display: flex !important; visibility: visible !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      #rs-log-panel, #rs-auto-btn { display: none !important; }
     }
+    #rs-auto-btn { position: fixed; bottom: 14px; left: 14px; width: 48px; height: 48px; border-radius: 50%; border: 2px solid #444; background: #1a1a2e; color: #e0e0e0; font-size: 22px; cursor: pointer; z-index: 99999; box-shadow: 0 4px 12px rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; transition: all .2s; }
+    #rs-auto-btn:hover { transform: scale(1.1); }
+    #rs-auto-btn.active { background: #0e6b0e; border-color: #50fa7b; box-shadow: 0 0 12px rgba(80,250,123,.4); }
+    #rs-log-panel { position: fixed; bottom: 10px; right: 10px; width: 280px; max-height: 350px; background: #1a1a2e; color: #e0e0e0; border: 1px solid #333; border-radius: 8px; font-family: monospace; font-size: 11px; z-index: 99999; box-shadow: 0 4px 12px rgba(0,0,0,.5); display: none; }
+    #rs-log-panel.visible { display: block; }
+    #rs-log-header { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; background: #16213e; border-radius: 8px 8px 0 0; font-weight: bold; font-size: 12px; }
+    #rs-log-header button { background: none; border: none; color: #e0e0e0; cursor: pointer; font-size: 13px; padding: 0 4px; }
+    #rs-log-body { max-height: 290px; overflow-y: auto; padding: 4px 0; }
+    .rs-log-stats { padding: 4px 10px; color: #8be9fd; border-bottom: 1px solid #333; margin-bottom: 2px; }
+    .rs-log-row { display: flex; justify-content: space-between; padding: 3px 10px; border-bottom: 1px solid #222; }
+    .rs-log-row:hover { background: #222; }
+    .rs-log-err { background: #2d1117; }
+    .rs-log-code { color: #50fa7b; font-weight: bold; min-width: 35px; }
+    .rs-log-pkgs { color: #bd93f9; min-width: 40px; }
+    .rs-log-ts { color: #888; flex: 1; text-align: right; margin: 0 6px; }
+    .rs-log-st { min-width: 16px; }
+    .rs-log-empty { padding: 12px; text-align: center; color: #666; }
   `;
   document.head.appendChild(style);
 
-  // ── Observer para tabela ──
-  function startObservers() {
-    let debounceTimer;
-    const obs = new MutationObserver(() => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(enhanceTable, 300);
+  // ── Print Log (localStorage) ──
+  function getLog() {
+    try { return JSON.parse(localStorage.getItem(LOG_KEY) || '[]'); } catch { return []; }
+  }
+  function saveLog(log) { localStorage.setItem(LOG_KEY, JSON.stringify(log)); }
+
+  function logRoutes(routes, status) {
+    const log = getLog();
+    const ts = new Date().toLocaleString('pt-BR');
+    routes.forEach(r => {
+      log.unshift({ code: r.routeCode, pkgs: r.packageCount, time: ts, status });
     });
-    obs.observe(document.body, { childList: true, subtree: true });
+    if (log.length > 500) log.length = 500;
+    saveLog(log);
+    renderLogPanel();
   }
 
-  document.body ? startObservers() : document.addEventListener('DOMContentLoaded', startObservers);
+  // ── Log Panel UI ──
+  function createLogPanel() {
+    const panel = document.createElement('div');
+    panel.id = 'rs-log-panel';
+    panel.innerHTML = `
+      <div id="rs-log-header">
+        <span>🖨️ Print Log</span>
+        <div>
+          <button id="rs-log-clear" title="Clear log">🗑️</button>
+          <button id="rs-log-toggle" title="Minimize">_</button>
+        </div>
+      </div>
+      <div id="rs-log-body"></div>
+    `;
+    document.body.appendChild(panel);
+    document.getElementById('rs-log-clear').onclick = () => { saveLog([]); renderLogPanel(); };
+    document.getElementById('rs-log-toggle').onclick = () => {
+      const body = document.getElementById('rs-log-body');
+      const btn = document.getElementById('rs-log-toggle');
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      btn.textContent = collapsed ? '_' : '▢';
+    };
+    renderLogPanel();
+  }
+
+  function renderLogPanel() {
+    const body = document.getElementById('rs-log-body');
+    if (!body) return;
+    const log = getLog();
+    if (!log.length) { body.innerHTML = '<div class="rs-log-empty">No prints yet</div>'; return; }
+    const today = new Date().toLocaleDateString('pt-BR');
+    const todayLogs = log.filter(e => e.time.startsWith(today));
+    body.innerHTML = `<div class="rs-log-stats">Today: ${todayLogs.length} routes | Total: ${log.length}</div>` +
+      log.slice(0, 100).map(e =>
+        `<div class="rs-log-row ${e.status === 'error' ? 'rs-log-err' : ''}">
+          <span class="rs-log-code">${e.code}</span>
+          <span class="rs-log-pkgs">${e.pkgs}pkg</span>
+          <span class="rs-log-ts">${e.time}</span>
+          <span class="rs-log-st">${e.status === 'ok' ? '✅' : '❌'}</span>
+        </div>`
+      ).join('');
+  }
+
+  // ── Toggle Button ──
+  function createToggleBtn() {
+    const btn = document.createElement('button');
+    btn.id = 'rs-auto-btn';
+    btn.title = 'Auto Print: OFF';
+    btn.textContent = '🖨️';
+    btn.onclick = () => {
+      autoEnabled = !autoEnabled;
+      btn.classList.toggle('active', autoEnabled);
+      btn.title = `Auto Print: ${autoEnabled ? 'ON' : 'OFF'}`;
+      document.getElementById('rs-log-panel')?.classList.toggle('visible', autoEnabled);
+    };
+    document.body.appendChild(btn);
+  }
+
+  // ── Auto Print ──
+  function autoPrint() {
+    if (!autoEnabled || isPrinting || Date.now() - lastPrintTime < PRINT_COOLDOWN) return;
+    const labels = document.querySelectorAll('table tbody tr td[mrdn-cell-selectable] label');
+    if (!labels.length) return;
+    isPrinting = true;
+    labels.forEach(l => l.click());
+    setTimeout(() => {
+      const btn = [...document.querySelectorAll('button')].find(b => b.textContent.trim() === 'Print Selected');
+      if (btn) {
+        btn.click();
+        lastPrintTime = Date.now();
+      }
+      isPrinting = false;
+    }, 500);
+  }
+
+  // ── Observer para tabela ──
+  function startObservers() {
+    const tableObs = new MutationObserver(() => {
+      clearTimeout(tableObs._t);
+      tableObs._t = setTimeout(replaceTableWindows, 300);
+    });
+    tableObs.observe(document.body, { childList: true, subtree: true });
+  }
+
+  function init() { startObservers(); createToggleBtn(); createLogPanel(); }
+  document.body ? init() : document.addEventListener('DOMContentLoaded', init);
 })();
