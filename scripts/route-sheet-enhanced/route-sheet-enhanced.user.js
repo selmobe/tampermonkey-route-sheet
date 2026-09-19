@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Route Sheet - Enhanced View VSP4 - AUTOPRINT
 // @namespace    https://github.com/selmobe/tampermonkey-route-sheet
-// @version      8.5
+// @version      8.6
 // @author       micaelqg
 // @description  Enhances route sheet with package count, cycle info and translated windows
 // @match        https://na.ssd-route-sheet-ui.gsf.a2z.com/*
@@ -31,20 +31,18 @@
   // Tempo máximo (minutos) para considerar rota como 1.5HR (padrão: 90 = 1h30)
   const MAX_1_5HR_MIN = 90;
 
-  const SCRIPT_VERSION = '8.5';
+  const SCRIPT_VERSION = '8.6';
   const VERSION_KEY = 'rs_script_version';
   const CHANGELOG_URL = 'https://github.com/selmobe/tampermonkey-route-sheet/blob/main/CHANGELOG.md';
   const RELEASE_NOTES = [
-    'Notificação in-app ao atualizar',
-    'Block Length 1.5HR com threshold configurável',
-    'Botão Auto Print no canto inferior direito',
+    'Auto Print persiste estado após recarregar a página',
   ];
 
   let printingRoutes = [];
   const routeTimeMap = {};
   let isPrinting = false;
   let lastPrintTime = 0;
-  let autoEnabled = false;
+  let autoEnabled = localStorage.getItem('rs_auto_enabled') === 'true';
   const PRINT_COOLDOWN = 10000;
   const LOG_KEY = 'rs_print_log';
 
@@ -337,10 +335,12 @@
   function createToggleBtn() {
     const btn = document.createElement('button');
     btn.id = 'rs-auto-btn';
-    btn.title = 'Auto Print: OFF';
+    btn.title = `Auto Print: ${autoEnabled ? 'ON' : 'OFF'}`;
     btn.textContent = '🖨️';
+    btn.classList.toggle('active', autoEnabled);
     btn.onclick = () => {
       autoEnabled = !autoEnabled;
+      localStorage.setItem('rs_auto_enabled', autoEnabled);
       btn.classList.toggle('active', autoEnabled);
       btn.title = `Auto Print: ${autoEnabled ? 'ON' : 'OFF'}`;
       document.getElementById('rs-log-panel')?.classList.toggle('visible', autoEnabled);
@@ -397,6 +397,9 @@
     setTimeout(() => toast.remove(), 15000);
   }
 
-  function init() { startObservers(); createToggleBtn(); createLogPanel(); checkUpdate(); }
+  function init() {
+    startObservers(); createToggleBtn(); createLogPanel(); checkUpdate();
+    if (autoEnabled) document.getElementById('rs-log-panel')?.classList.add('visible');
+  }
   document.body ? init() : document.addEventListener('DOMContentLoaded', init);
 })();

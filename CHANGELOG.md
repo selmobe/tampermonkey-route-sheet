@@ -2,6 +2,11 @@
 
 Todas as alterações relevantes do script são documentadas aqui.
 
+## [8.6] - 2025-01-20
+
+### Corrigido
+- Auto Print agora persiste estado (ON/OFF) após recarregar a página via localStorage
+
 ## [8.5] - 2025-01-20
 
 ### Adicionado
