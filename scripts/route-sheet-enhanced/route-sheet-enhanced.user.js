@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Route Sheet - Enhanced View VSP4 - AUTOPRINT
 // @namespace    https://github.com/selmobe/tampermonkey-route-sheet
-// @version      8.3
+// @version      8.4
 // @author       micaelqg
 // @description  Enhances route sheet with package count, cycle info and translated windows
 // @match        https://na.ssd-route-sheet-ui.gsf.a2z.com/*
@@ -18,9 +18,16 @@
 // ── Changelog v8.3 ──
 // - Botão Auto Print reposicionado para canto inferior direito
 // - Print Log Panel abre acima do botão
+// ── Changelog v8.4 ──
+// - Adicionado Block Length 1.5HR: identifica rotas com duração real ≤ threshold forçadas para 2HR
+// - Variável MAX_1_5HR_MIN configurável em minutos (padrão 90 = 1h30)
 
 (function () {
   'use strict';
+
+  // ── Configuração ──
+  // Tempo máximo (minutos) para considerar rota como 1.5HR (padrão: 90 = 1h30)
+  const MAX_1_5HR_MIN = 90;
 
   let printingRoutes = [];
   const routeTimeMap = {};
@@ -55,13 +62,17 @@
     return TIME_RANGES.find(r => time >= r.min && time <= r.max) || null;
   }
 
+  function getBlockOverride(route) {
+    if (route.displayBlockLength === '2HR' && route.rawRouteLengthValue <= MAX_1_5HR_MIN * 60000) return '1.5HR';
+    return null;
+  }
+
   function storeRoutes(data) {
-    // limpa dados anteriores
     Object.keys(routeTimeMap).forEach(k => delete routeTimeMap[k]);
     (Array.isArray(data) ? data : []).forEach(r => {
       if (r.routeCode && r.mainPromiseTime) {
         const key = r.routeCode + '|' + (r.dispatchByTime || '');
-        routeTimeMap[key] = r.mainPromiseTime;
+        routeTimeMap[key] = { mainPromiseTime: r.mainPromiseTime, blockOverride: getBlockOverride(r) };
       }
     });
   }
@@ -137,10 +148,13 @@
       const rc = rcSpan.textContent.trim();
       const dt = dtSpan.textContent.trim();
       const key = rc + '|' + dt;
-      const mpt = routeTimeMap[key];
-      const range = findTimeRange(mpt);
-      if (range) {
-        pwSpan.textContent = range.cycle;
+      const entry = routeTimeMap[key];
+      if (!entry) return;
+      const range = findTimeRange(entry.mainPromiseTime);
+      if (range) pwSpan.textContent = range.cycle;
+      if (entry.blockOverride) {
+        const blSpan = cells[3]?.querySelector('span');
+        if (blSpan && blSpan.textContent.trim() === '2HR') blSpan.textContent = entry.blockOverride;
       }
     });
   }
@@ -168,12 +182,17 @@
       const range = findTimeRange(route.mainPromiseTime);
       const cycle = range ? range.cycle : '-';
       const windowName = range ? range.window : '-';
+      const rcKey = route.routeCode + '|' + (route.dispatchByTime || '');
+      const blockOverride = routeTimeMap[rcKey]?.blockOverride || getBlockOverride(route);
 
       page.querySelectorAll('.rs-row').forEach(row => {
         const title = row.querySelector('.rs-small-title');
         const data = row.querySelector('.rs-large-data');
-        if (title && data && title.textContent.trim().toLowerCase().includes('window')) {
-          data.textContent = windowName;
+        if (!title || !data) return;
+        const label = title.textContent.trim().toLowerCase();
+        if (label.includes('window')) data.textContent = windowName;
+        if (blockOverride && (label.includes('block') || label.includes('route length')) && data.textContent.trim() === '2HR') {
+          data.textContent = blockOverride;
         }
       });
 
