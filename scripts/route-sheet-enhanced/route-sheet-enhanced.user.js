@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Route Sheet - Enhanced View VSP4 - AUTOPRINT
 // @namespace    https://github.com/selmobe/tampermonkey-route-sheet
-// @version      8.4
+// @version      8.5
 // @author       micaelqg
 // @description  Enhances route sheet with package count, cycle info and translated windows
 // @match        https://na.ssd-route-sheet-ui.gsf.a2z.com/*
@@ -21,6 +21,8 @@
 // ── Changelog v8.4 ──
 // - Adicionado Block Length 1.5HR: identifica rotas com duração real ≤ threshold forçadas para 2HR
 // - Variável MAX_1_5HR_MIN configurável em minutos (padrão 90 = 1h30)
+// ── Changelog v8.5 ──
+// - Notificação in-app ao atualizar: exibe novidades da versão com link para changelog completo
 
 (function () {
   'use strict';
@@ -28,6 +30,15 @@
   // ── Configuração ──
   // Tempo máximo (minutos) para considerar rota como 1.5HR (padrão: 90 = 1h30)
   const MAX_1_5HR_MIN = 90;
+
+  const SCRIPT_VERSION = '8.5';
+  const VERSION_KEY = 'rs_script_version';
+  const CHANGELOG_URL = 'https://github.com/selmobe/tampermonkey-route-sheet/blob/main/CHANGELOG.md';
+  const RELEASE_NOTES = [
+    'Notificação in-app ao atualizar',
+    'Block Length 1.5HR com threshold configurável',
+    'Botão Auto Print no canto inferior direito',
+  ];
 
   let printingRoutes = [];
   const routeTimeMap = {};
@@ -250,6 +261,14 @@
     .rs-log-ts { color: #888; flex: 1; text-align: right; margin: 0 6px; }
     .rs-log-st { min-width: 16px; }
     .rs-log-empty { padding: 12px; text-align: center; color: #666; }
+    #rs-update-toast { position: fixed; top: 20px; right: 20px; width: 300px; background: #1a1a2e; color: #e0e0e0; border: 1px solid #50fa7b; border-radius: 8px; font-family: monospace; font-size: 12px; z-index: 100000; box-shadow: 0 4px 16px rgba(0,0,0,.6); animation: rs-slide-in .3s ease; }
+    #rs-toast-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: #16213e; border-radius: 8px 8px 0 0; font-weight: bold; }
+    #rs-toast-header button { background: none; border: none; color: #e0e0e0; cursor: pointer; font-size: 14px; }
+    #rs-update-toast ul { margin: 8px 12px; padding-left: 16px; }
+    #rs-update-toast li { margin: 4px 0; color: #8be9fd; }
+    #rs-update-toast a { display: block; padding: 8px 12px; color: #50fa7b; text-align: center; border-top: 1px solid #333; }
+    @keyframes rs-slide-in { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+    @media print { #rs-update-toast { display: none !important; } }
   `;
   document.head.appendChild(style);
 
@@ -355,6 +374,29 @@
     tableObs.observe(document.body, { childList: true, subtree: true });
   }
 
-  function init() { startObservers(); createToggleBtn(); createLogPanel(); }
+  // ── Update Toast ──
+  function checkUpdate() {
+    const prev = localStorage.getItem(VERSION_KEY);
+    localStorage.setItem(VERSION_KEY, SCRIPT_VERSION);
+    if (prev && prev !== SCRIPT_VERSION) showUpdateToast(prev);
+  }
+
+  function showUpdateToast(prev) {
+    const toast = document.createElement('div');
+    toast.id = 'rs-update-toast';
+    toast.innerHTML = `
+      <div id="rs-toast-header">
+        <span>🚀 Atualizado v${prev} → v${SCRIPT_VERSION}</span>
+        <button id="rs-toast-close">✕</button>
+      </div>
+      <ul>${RELEASE_NOTES.map(n => `<li>${n}</li>`).join('')}</ul>
+      <a href="${CHANGELOG_URL}" target="_blank">Ver changelog completo</a>
+    `;
+    document.body.appendChild(toast);
+    document.getElementById('rs-toast-close').onclick = () => toast.remove();
+    setTimeout(() => toast.remove(), 15000);
+  }
+
+  function init() { startObservers(); createToggleBtn(); createLogPanel(); checkUpdate(); }
   document.body ? init() : document.addEventListener('DOMContentLoaded', init);
 })();
